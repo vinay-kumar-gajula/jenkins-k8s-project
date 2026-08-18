@@ -142,10 +142,7 @@ pipeline {
                             echo "Updating Web Application Image"
                             echo "=========================================="
 
-                            //kubectl set image \
-                            //    deployment/${APP_NAME} \
-                            //    nginx=${IMAGE} \
-                            //    -n ${NAMESPACE}
+                           
 
 				kubectl set image \
     					deployment/${APP_NAME} \
