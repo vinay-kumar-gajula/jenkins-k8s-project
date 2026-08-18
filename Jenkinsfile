@@ -2,11 +2,19 @@ pipeline {
     agent any
 
     environment {
-        KUBECONFIG = '/var/jenkins_home/kubeconfig'
-        K8S_NAMESPACE = 'devops'
+        APP_NAME = "web-app"
+        NAMESPACE = "devops"
+        KIND_CLUSTER = "devops-lab"
+        IMAGE_NAME = "web-app"
     }
 
     stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
 
         stage('Verify') {
             steps {
@@ -15,6 +23,10 @@ pipeline {
 
                     echo "=== Git Commit ==="
                     git log --oneline -1
+
+                    echo
+                    echo "=== Docker ==="
+                    docker --version
 
                     echo
                     echo "=== Kubernetes Client ==="
@@ -27,10 +39,6 @@ pipeline {
                     echo
                     echo "=== Kubernetes Nodes ==="
                     kubectl get nodes
-
-                    echo
-                    echo "=== Existing Application ==="
-                    kubectl get all -n ${K8S_NAMESPACE}
                 '''
             }
         }
@@ -52,27 +60,66 @@ pipeline {
             }
         }
 
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "=== Building Docker Image ==="
+
+                    docker build \
+                        -t "${IMAGE_NAME}:${BUILD_NUMBER}" \
+                        .
+
+                    echo
+                    echo "=== Built Image ==="
+
+                    docker images "${IMAGE_NAME}:${BUILD_NUMBER}"
+                '''
+            }
+        }
+
+        stage('Load Image into Kind') {
+            steps {
+                sh '''
+                    set -e
+
+                    echo "=== Loading Image into Kind ==="
+
+                    kind load docker-image \
+                        "${IMAGE_NAME}:${BUILD_NUMBER}" \
+                        --name "${KIND_CLUSTER}"
+
+                    echo
+                    echo "Image loaded into Kind successfully."
+                '''
+            }
+        }
+
         stage('Deploy') {
             steps {
                 sh '''
                     set -e
 
-                    echo "=== Deploying application ==="
+                    echo "=== Applying Kubernetes manifests ==="
 
                     kubectl apply \
                         -f k8s/app/
 
                     echo
-                    echo "=== Deployment Status ==="
+                    echo "=== Updating web-app image ==="
+
+                    kubectl set image \
+                        deployment/"${APP_NAME}" \
+                        nginx="${IMAGE_NAME}:${BUILD_NUMBER}" \
+                        --namespace "${NAMESPACE}"
+
+                    echo
+                    echo "=== Waiting for web-app rollout ==="
 
                     kubectl rollout status \
-                        deployment/web-app \
-                        -n ${K8S_NAMESPACE} \
-                        --timeout=120s
-
-                    kubectl rollout status \
-                        deployment/backend \
-                        -n ${K8S_NAMESPACE} \
+                        deployment/"${APP_NAME}" \
+                        --namespace "${NAMESPACE}" \
                         --timeout=120s
                 '''
             }
@@ -85,23 +132,32 @@ pipeline {
 
                     echo "=== Pods ==="
                     kubectl get pods \
-                        -n ${K8S_NAMESPACE} \
+                        -n "${NAMESPACE}" \
                         -o wide
-
-                    echo
-                    echo "=== Services ==="
-                    kubectl get svc \
-                        -n ${K8S_NAMESPACE}
 
                     echo
                     echo "=== Deployments ==="
                     kubectl get deployments \
-                        -n ${K8S_NAMESPACE}
+                        -n "${NAMESPACE}"
+
+                    echo
+                    echo "=== Services ==="
+                    kubectl get services \
+                        -n "${NAMESPACE}"
 
                     echo
                     echo "=== Ingress ==="
                     kubectl get ingress \
-                        -n ${K8S_NAMESPACE}
+                        -n "${NAMESPACE}"
+
+                    echo
+                    echo "=== Current Image ==="
+
+                    kubectl get deployment "${APP_NAME}" \
+                        -n "${NAMESPACE}" \
+                        -o jsonpath='{.spec.template.spec.containers[0].image}'
+
+                    echo
                 '''
             }
         }
@@ -113,11 +169,7 @@ pipeline {
         }
 
         failure {
-            echo 'Pipeline failed. Check the console output.'
-        }
-
-        always {
-            echo 'Pipeline completed.'
+            echo 'Pipeline failed.'
         }
     }
 }
