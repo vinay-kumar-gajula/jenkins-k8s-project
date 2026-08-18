@@ -49,7 +49,8 @@ pipeline {
                         returnStdout: true
                     ).trim()
 
-                    env.IMAGE = "${env.APP_NAME}:${env.GIT_SHA}"
+                    // env.IMAGE = "${env.APP_NAME}:${env.GIT_SHA}"
+		       env.IMAGE = "${env.APP_NAME}:does-not-exist"
 
                     echo "Image to build: ${env.IMAGE}"
                 }
