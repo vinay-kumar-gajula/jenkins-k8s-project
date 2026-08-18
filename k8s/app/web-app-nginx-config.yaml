@@ -11,8 +11,7 @@ data:
       server_name web-app.local;
 
       location / {
-        root /usr/share/nginx/html;
-        index index.html;
+         return 500;
       }
 
       location /api/ {
