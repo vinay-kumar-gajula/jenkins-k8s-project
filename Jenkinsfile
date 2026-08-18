@@ -6,6 +6,7 @@ pipeline {
         NAMESPACE   = 'devops'
         KIND_CLUSTER = 'devops-lab'
         CONTAINER_NAME = 'nginx'
+	KUBECONFIG      = '/var/jenkins_home/kubeconfig'
     }
 
     stages {
