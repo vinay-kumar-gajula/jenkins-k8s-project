@@ -8,14 +8,6 @@ pipeline {
 
     stages {
 
-        stage('Checkout') {
-            steps {
-                git branch: 'main',
-                    credentialsId: 'd884b270-cd7b-45cf-bfd3-93bf44da9bed',
-                    url: 'git@github.com:vinay-kumar-gajula/jenkins-k8s-project.git'
-            }
-        }
-
         stage('Verify') {
             steps {
                 sh '''
@@ -92,19 +84,24 @@ pipeline {
                     set -e
 
                     echo "=== Pods ==="
-                    kubectl get pods -n ${K8S_NAMESPACE} -o wide
+                    kubectl get pods \
+                        -n ${K8S_NAMESPACE} \
+                        -o wide
 
                     echo
                     echo "=== Services ==="
-                    kubectl get svc -n ${K8S_NAMESPACE}
+                    kubectl get svc \
+                        -n ${K8S_NAMESPACE}
 
                     echo
                     echo "=== Deployments ==="
-                    kubectl get deployments -n ${K8S_NAMESPACE}
+                    kubectl get deployments \
+                        -n ${K8S_NAMESPACE}
 
                     echo
                     echo "=== Ingress ==="
-                    kubectl get ingress -n ${K8S_NAMESPACE}
+                    kubectl get ingress \
+                        -n ${K8S_NAMESPACE}
                 '''
             }
         }
