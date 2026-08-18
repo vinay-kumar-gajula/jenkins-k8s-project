@@ -2,11 +2,10 @@ pipeline {
     agent any
 
     environment {
-        APP_NAME = "web-app"
-        NAMESPACE = "devops"
-        KIND_CLUSTER = "devops-lab"
-        IMAGE_NAME = "web-app"
-	KUBECONFIG = "/var/jenkins_home/kubeconfig"
+        APP_NAME    = 'web-app'
+        NAMESPACE   = 'devops'
+        KIND_CLUSTER = 'devops-lab'
+        CONTAINER_NAME = 'nginx'
     }
 
     stages {
@@ -34,13 +33,30 @@ pipeline {
                     kubectl version --client
 
                     echo
-                    echo "=== Kubernetes Context ==="
-                    kubectl config current-context
+                    echo "=== Kind ==="
+                    kind version
 
                     echo
-                    echo "=== Kubernetes Nodes ==="
-                    kubectl get nodes
+                    echo "=== Kubernetes Context ==="
+                    kubectl config current-context
                 '''
+            }
+        }
+
+        stage('Set Image Tag') {
+            steps {
+                script {
+                    env.IMAGE_TAG = sh(
+                        script: 'git rev-parse --short HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    env.IMAGE_NAME = "${env.APP_NAME}:${env.IMAGE_TAG}"
+
+                    echo "======================================"
+                    echo "Image: ${env.IMAGE_NAME}"
+                    echo "======================================"
+                }
             }
         }
 
@@ -49,7 +65,7 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "=== Validating Kubernetes manifests ==="
+                    echo "=== Validating Kubernetes Manifests ==="
 
                     kubectl apply \
                         --dry-run=server \
@@ -67,15 +83,11 @@ pipeline {
                     set -e
 
                     echo "=== Building Docker Image ==="
+                    echo "Image: ${IMAGE_NAME}"
 
                     docker build \
-                        -t "${IMAGE_NAME}:${BUILD_NUMBER}" \
+                        -t "${IMAGE_NAME}" \
                         .
-
-                    echo
-                    echo "=== Built Image ==="
-
-                    docker images "${IMAGE_NAME}:${BUILD_NUMBER}"
                 '''
             }
         }
@@ -86,13 +98,12 @@ pipeline {
                     set -e
 
                     echo "=== Loading Image into Kind ==="
+                    echo "Image: ${IMAGE_NAME}"
+                    echo "Cluster: ${KIND_CLUSTER}"
 
                     kind load docker-image \
-                        "${IMAGE_NAME}:${BUILD_NUMBER}" \
+                        "${IMAGE_NAME}" \
                         --name "${KIND_CLUSTER}"
-
-                    echo
-                    echo "Image loaded into Kind successfully."
                 '''
             }
         }
@@ -102,26 +113,29 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "=== Applying Kubernetes manifests ==="
+                    echo "=== Deploying Kubernetes Manifests ==="
 
                     kubectl apply \
                         -f k8s/app/
 
                     echo
-                    echo "=== Updating web-app image ==="
+                    echo "=== Updating Application Image ==="
 
                     kubectl set image \
-                        deployment/"${APP_NAME}" \
-                        nginx="${IMAGE_NAME}:${BUILD_NUMBER}" \
+                        deployment/web-app \
+                        "${CONTAINER_NAME}=${IMAGE_NAME}" \
                         --namespace "${NAMESPACE}"
 
                     echo
-                    echo "=== Waiting for web-app rollout ==="
+                    echo "=== Waiting for Rollout ==="
 
                     kubectl rollout status \
-                        deployment/"${APP_NAME}" \
+                        deployment/web-app \
                         --namespace "${NAMESPACE}" \
                         --timeout=120s
+
+                    echo
+                    echo "Web application rollout successful."
                 '''
             }
         }
@@ -132,45 +146,61 @@ pipeline {
                     set -e
 
                     echo "=== Pods ==="
+
                     kubectl get pods \
-                        -n "${NAMESPACE}" \
+                        --namespace "${NAMESPACE}" \
                         -o wide
 
                     echo
                     echo "=== Deployments ==="
+
                     kubectl get deployments \
-                        -n "${NAMESPACE}"
+                        --namespace "${NAMESPACE}"
 
                     echo
                     echo "=== Services ==="
+
                     kubectl get services \
-                        -n "${NAMESPACE}"
+                        --namespace "${NAMESPACE}"
 
                     echo
                     echo "=== Ingress ==="
+
                     kubectl get ingress \
-                        -n "${NAMESPACE}"
+                        --namespace "${NAMESPACE}"
 
                     echo
                     echo "=== Current Image ==="
 
-                    kubectl get deployment "${APP_NAME}" \
-                        -n "${NAMESPACE}" \
+                    kubectl get deployment web-app \
+                        --namespace "${NAMESPACE}" \
                         -o jsonpath='{.spec.template.spec.containers[0].image}'
 
                     echo
+                    echo
+                    echo "=== Rollout History ==="
+
+                    kubectl rollout history \
+                        deployment/web-app \
+                        --namespace "${NAMESPACE}"
                 '''
             }
         }
     }
 
     post {
+
         success {
-            echo 'Kubernetes deployment completed successfully.'
+            echo "======================================"
+            echo "Pipeline completed successfully."
+            echo "Deployed image: ${IMAGE_NAME}"
+            echo "======================================"
         }
 
         failure {
-            echo 'Pipeline failed.'
+            echo "======================================"
+            echo "Pipeline failed."
+            echo "======================================"
         }
     }
 }
