@@ -1,0 +1,8 @@
+# TLS private key
+*.key
+
+# Kubernetes secrets
+k8s/app/secret.yaml
+
+# Local environment files
+.env

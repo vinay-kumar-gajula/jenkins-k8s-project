@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+
+metadata:
+  name: web-app-config
+  namespace: devops
+
+data:
+  APP_NAME: "web-app"
+  APP_ENV: "dev"
+  LOG_LEVEL: "info"  
