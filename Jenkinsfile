@@ -6,6 +6,7 @@ pipeline {
         NAMESPACE = "devops"
         KIND_CLUSTER = "devops-lab"
         IMAGE_NAME = "web-app"
+	KUBECONFIG = "/var/jenkins_home/kubeconfig"
     }
 
     stages {
