@@ -19,41 +19,44 @@ pipeline {
 
         stage('Prepare') {
             steps {
+                script {
+
+                    env.GIT_SHA = sh(
+                        script: 'git rev-parse --short=7 HEAD',
+                        returnStdout: true
+                    ).trim()
+
+                    env.IMAGE = "${env.APP_NAME}:${env.GIT_SHA}"
+
+                    echo "=========================================="
+                    echo "Git SHA      : ${env.GIT_SHA}"
+                    echo "Docker Image : ${env.IMAGE}"
+                    echo "=========================================="
+                }
+
                 sh '''
                     set -e
 
                     echo "=== Git Commit ==="
                     git log --oneline -1
 
-                    GIT_SHA=$(git rev-parse --short=7 HEAD)
-
-                    echo "Git SHA: ${GIT_SHA}"
-
+                    echo
                     echo "=== Tools ==="
+
                     docker --version
                     kubectl version --client
                     kind version
 
                     echo
                     echo "=== Kubernetes Context ==="
+
                     kubectl config current-context || true
 
                     echo
                     echo "=== Kubernetes Nodes ==="
+
                     kubectl get nodes
                 '''
-                
-                script {
-                    env.GIT_SHA = sh(
-                        script: 'git rev-parse --short=7 HEAD',
-                        returnStdout: true
-                    ).trim()
-
-                    // env.IMAGE = "${env.APP_NAME}:${env.GIT_SHA}"
-		       env.IMAGE = "${env.APP_NAME}:does-not-exist"
-
-                    echo "Image to build: ${env.IMAGE}"
-                }
             }
         }
 
@@ -79,16 +82,20 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "=== Building Docker Image ==="
+                    echo "=========================================="
+                    echo "Building Docker Image"
                     echo "Image: ${IMAGE}"
+                    echo "=========================================="
 
                     docker build \
                         -t "${IMAGE}" \
                         .
 
                     echo
-                    echo "=== Docker Image ==="
-                    docker images "${APP_NAME}"
+                    echo "=== Built Image ==="
+
+                    docker images "${APP_NAME}" \
+                        --format 'table {{.Repository}}\\t{{.Tag}}\\t{{.ID}}\\t{{.Size}}'
                 '''
             }
         }
@@ -98,9 +105,11 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "=== Loading Image into Kind ==="
+                    echo "=========================================="
+                    echo "Loading Image into Kind"
                     echo "Cluster: ${KIND_CLUSTER}"
-                    echo "Image: ${IMAGE}"
+                    echo "Image  : ${IMAGE}"
+                    echo "=========================================="
 
                     kind load docker-image \
                         "${IMAGE}" \
@@ -121,13 +130,17 @@ pipeline {
                         sh '''
                             set -e
 
-                            echo "=== Applying Kubernetes manifests ==="
+                            echo "=========================================="
+                            echo "Applying Kubernetes manifests"
+                            echo "=========================================="
 
                             kubectl apply \
                                 -f k8s/app/
 
                             echo
-                            echo "=== Updating Web Application Image ==="
+                            echo "=========================================="
+                            echo "Updating Web Application Image"
+                            echo "=========================================="
 
                             kubectl set image \
                                 deployment/${APP_NAME} \
@@ -135,13 +148,16 @@ pipeline {
                                 -n ${NAMESPACE}
 
                             echo
-                            echo "Deployment triggered."
+                            echo "Deployment image updated to:"
+                            echo "${IMAGE}"
                         '''
 
                         sh '''
                             set -e
 
-                            echo "=== Waiting for Web Application Rollout ==="
+                            echo "=========================================="
+                            echo "Waiting for Web Application Rollout"
+                            echo "=========================================="
 
                             kubectl rollout status \
                                 deployment/${APP_NAME} \
@@ -160,23 +176,27 @@ pipeline {
 
                         sh '''
                             echo "=== Deployment Status ==="
+
                             kubectl get deployment ${APP_NAME} \
                                 -n ${NAMESPACE} \
                                 -o wide || true
 
                             echo
                             echo "=== Pods ==="
+
                             kubectl get pods \
                                 -n ${NAMESPACE} \
                                 -o wide || true
 
                             echo
                             echo "=== ReplicaSets ==="
+
                             kubectl get rs \
                                 -n ${NAMESPACE} || true
 
                             echo
                             echo "=== Recent Events ==="
+
                             kubectl get events \
                                 -n ${NAMESPACE} \
                                 --sort-by=.lastTimestamp \
@@ -202,7 +222,9 @@ pipeline {
 
                         echo "Rollback completed."
 
-                        error("Deployment failed. Previous version has been restored.")
+                        error(
+                            "Deployment failed. Previous version has been restored."
+                        )
                     }
                 }
             }
@@ -213,38 +235,83 @@ pipeline {
                 sh '''
                     set -e
 
-                    echo "=== Pods ==="
+                    echo "=========================================="
+                    echo "Pods"
+                    echo "=========================================="
 
                     kubectl get pods \
                         -n ${NAMESPACE} \
                         -o wide
 
                     echo
-                    echo "=== Deployments ==="
+                    echo "=========================================="
+                    echo "Deployments"
+                    echo "=========================================="
 
                     kubectl get deployments \
                         -n ${NAMESPACE}
 
                     echo
-                    echo "=== Services ==="
+                    echo "=========================================="
+                    echo "Services"
+                    echo "=========================================="
 
                     kubectl get services \
                         -n ${NAMESPACE}
 
                     echo
-                    echo "=== Ingress ==="
+                    echo "=========================================="
+                    echo "Ingress"
+                    echo "=========================================="
 
                     kubectl get ingress \
                         -n ${NAMESPACE}
 
                     echo
-                    echo "=== Current Image ==="
+                    echo "=========================================="
+                    echo "Expected Image"
+                    echo "=========================================="
 
-                    kubectl get deployment ${APP_NAME} \
-                        -n ${NAMESPACE} \
-                        -o jsonpath='{.spec.template.spec.containers[0].image}'
+                    echo "${IMAGE}"
 
                     echo
+                    echo "=========================================="
+                    echo "Actual Deployment Image"
+                    echo "=========================================="
+
+                    ACTUAL_IMAGE=$(kubectl get deployment ${APP_NAME} \
+                        -n ${NAMESPACE} \
+                        -o jsonpath='{.spec.template.spec.containers[0].image}')
+
+                    echo "${ACTUAL_IMAGE}"
+
+                    echo
+                    echo "=========================================="
+                    echo "Verifying Image"
+                    echo "=========================================="
+
+                    if [ "${ACTUAL_IMAGE}" != "${IMAGE}" ]; then
+                        echo "ERROR: Deployment image does not match expected image."
+                        echo "Expected: ${IMAGE}"
+                        echo "Actual  : ${ACTUAL_IMAGE}"
+                        exit 1
+                    fi
+
+                    echo "Image verification successful."
+
+                    echo
+                    echo "=========================================="
+                    echo "Rollout History"
+                    echo "=========================================="
+
+                    kubectl rollout history \
+                        deployment/${APP_NAME} \
+                        -n ${NAMESPACE}
+
+                    echo
+                    echo "=========================================="
+                    echo "Deployment Verification Successful"
+                    echo "=========================================="
                 '''
             }
         }
@@ -256,6 +323,7 @@ pipeline {
             echo "=========================================="
             echo "Pipeline completed successfully."
             echo "Image deployed: ${IMAGE}"
+            echo "Git SHA: ${GIT_SHA}"
             echo "=========================================="
         }
 
