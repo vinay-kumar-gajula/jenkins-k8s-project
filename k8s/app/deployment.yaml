@@ -19,6 +19,12 @@ spec:
     spec:
       nodeSelector:
         workload: frontend
+
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+
         
       containers:
         - name: nginx
