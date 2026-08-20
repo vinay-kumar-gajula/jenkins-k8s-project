@@ -3,6 +3,9 @@ kind: Deployment
 metadata:
   name: backend
   namespace: devops
+  labels:
+    app: backend
+
 spec:
   replicas: 2
 
@@ -19,9 +22,25 @@ spec:
       containers:
         - name: backend
           image: nginx:1.27-alpine
+          imagePullPolicy: IfNotPresent
 
           ports:
-            - containerPort: 80
+            - name: http
+              containerPort: 80
+              protocol: TCP
+
+          env:
+            - name: REDIS_HOST
+              value: "redis"
+
+            - name: REDIS_PORT
+              value: "6379"
+
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: redis-secret
+                  key: REDIS_PASSWORD
 
           resources:
             requests:
@@ -35,7 +54,8 @@ spec:
           volumeMounts:
             - name: backend-storage
               mountPath: /data
+
       volumes:
-          - name: backend-storage
-            persistentVolumeClaim:
-              claimName: backend-storage           
+        - name: backend-storage
+          persistentVolumeClaim:
+            claimName: backend-storage
