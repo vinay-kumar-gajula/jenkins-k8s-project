@@ -19,6 +19,15 @@ spec:
         app: backend
 
     spec:
+      nodeSelector:
+        workload: stateful
+
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: stateful
+          effect: NoSchedule
+          
       containers:
         - name: backend
           image: nginx:1.27-alpine

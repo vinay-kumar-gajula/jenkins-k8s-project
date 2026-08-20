@@ -18,6 +18,9 @@ spec:
         app: web-app
 
     spec:
+      nodeSelector:
+        workload: frontend
+        
       containers:
         - name: nginx
           image: web-app:latest

@@ -22,6 +22,15 @@ spec:
         app: redis
 
     spec:
+      nodeSelector:
+        workload: stateful
+
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: stateful
+          effect: NoSchedule
+            
       containers:
         - name: redis
           image: redis:7.4-alpine
