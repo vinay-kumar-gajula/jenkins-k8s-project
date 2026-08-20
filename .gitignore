@@ -6,3 +6,5 @@ k8s/app/secret.yaml
 
 # Local environment files
 .env
+
+*secret.yaml
