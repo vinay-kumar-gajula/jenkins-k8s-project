@@ -1,0 +1,15 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+
+metadata:
+  name: web-app
+  namespace: devops
+  labels:
+    app: web-app
+
+spec:
+  maxUnavailable: 1
+
+  selector:
+    matchLabels:
+      app: web-app
