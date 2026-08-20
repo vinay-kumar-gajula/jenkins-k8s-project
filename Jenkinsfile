@@ -4,6 +4,7 @@ pipeline {
 
     environment {
         APP_NAME     = "web-app"
+        CONTAINER_NAME = "nginx"
         NAMESPACE    = "devops"
         KIND_CLUSTER = "devops-lab"
         KUBECONFIG   = "/var/jenkins_home/kubeconfig"
@@ -11,14 +12,21 @@ pipeline {
 
     stages {
 
+        // ============================================================
+        // Stage 1: Download source code from GitHub
+        // ============================================================
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
 
+        // ============================================================
+        // Stage 2: Prepare build variables and verify required tools
+        // ============================================================
         stage('Prepare') {
             steps {
+
                 sh '''
                     set -e
 
@@ -30,7 +38,7 @@ pipeline {
 
                     echo
                     echo "=========================================="
-                    echo "Tools"
+                    echo "Installed Tools"
                     echo "=========================================="
 
                     docker --version
@@ -46,18 +54,24 @@ pipeline {
                 '''
 
                 script {
+                    // Get the first seven characters of the Git commit ID.
                     env.GIT_SHA = sh(
                         script: 'git rev-parse --short=7 HEAD',
                         returnStdout: true
                     ).trim()
 
+                    // Example: web-app:81e279d
                     env.IMAGE = "${env.APP_NAME}:${env.GIT_SHA}"
 
+                    echo "Git SHA       : ${env.GIT_SHA}"
                     echo "Image to build: ${env.IMAGE}"
                 }
             }
         }
 
+        // ============================================================
+        // Stage 3: Validate Kubernetes YAML files
+        // ============================================================
         stage('Validate Manifests') {
             steps {
                 sh '''
@@ -77,6 +91,9 @@ pipeline {
             }
         }
 
+        // ============================================================
+        // Stage 4: Build Docker image using the Git SHA
+        // ============================================================
         stage('Build Docker Image') {
             steps {
                 sh '''
@@ -89,7 +106,7 @@ pipeline {
                     echo "Image: ${IMAGE}"
 
                     docker build \
-                        -t "${IMAGE}" \
+                        --tag "${IMAGE}" \
                         .
 
                     echo
@@ -100,6 +117,9 @@ pipeline {
             }
         }
 
+        // ============================================================
+        // Stage 5: Load the locally built image into every kind node
+        // ============================================================
         stage('Load Image into Kind') {
             steps {
                 sh '''
@@ -110,7 +130,7 @@ pipeline {
                     echo "=========================================="
 
                     echo "Cluster: ${KIND_CLUSTER}"
-                    echo "Image: ${IMAGE}"
+                    echo "Image  : ${IMAGE}"
 
                     kind load docker-image \
                         "${IMAGE}" \
@@ -122,12 +142,53 @@ pipeline {
             }
         }
 
+        // ============================================================
+        // Stage 6: Deploy, verify rollout and rollback upon failure
+        // ============================================================
         stage('Deploy') {
             steps {
                 script {
 
+                    /*
+                     * Store the currently running image before applying
+                     * any Kubernetes changes.
+                     *
+                     * Example:
+                     * previousImage = web-app:abc1234
+                     */
+                    def previousImage = ""
+
+                    /*
+                     * This becomes true only when the pipeline starts
+                     * updating the Deployment image.
+                     */
+                    def imageUpdateStarted = false
+
                     try {
 
+                        // ------------------------------------------------
+                        // Find the currently deployed stable image
+                        // ------------------------------------------------
+                        previousImage = sh(
+                            script: """
+                                kubectl get deployment ${APP_NAME} \
+                                    --namespace ${NAMESPACE} \
+                                    --output jsonpath='{.spec.template.spec.containers[?(@.name=="${CONTAINER_NAME}")].image}' \
+                                    2>/dev/null || true
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        echo "=========================================="
+                        echo "Deployment Images"
+                        echo "=========================================="
+
+                        echo "Previous image: ${previousImage ?: 'Not available'}"
+                        echo "New image     : ${env.IMAGE}"
+
+                        // ------------------------------------------------
+                        // Apply Kubernetes manifests
+                        // ------------------------------------------------
                         sh '''
                             set -e
 
@@ -139,20 +200,34 @@ pipeline {
                                 -f k8s/app/
 
                             echo
+                            echo "Kubernetes manifests applied successfully."
+                        '''
+
+                        // The image-update operation is about to begin.
+                        imageUpdateStarted = true
+
+                        // ------------------------------------------------
+                        // Update the web-app container image
+                        // ------------------------------------------------
+                        sh '''
+                            set -e
+
                             echo "=========================================="
                             echo "Updating Web Application Image"
                             echo "=========================================="
 
                             kubectl set image \
                                 deployment/${APP_NAME} \
-                                nginx=${IMAGE} \
-                                -n ${NAMESPACE}
+                                ${CONTAINER_NAME}=${IMAGE} \
+                                --namespace ${NAMESPACE}
 
                             echo
-                            echo "Deployment image updated to:"
-                            echo "${IMAGE}"
+                            echo "Deployment image updated to ${IMAGE}."
                         '''
 
+                        // ------------------------------------------------
+                        // Wait for the new pods to become Ready
+                        // ------------------------------------------------
                         sh '''
                             set -e
 
@@ -162,13 +237,16 @@ pipeline {
 
                             kubectl rollout status \
                                 deployment/${APP_NAME} \
-                                -n ${NAMESPACE} \
+                                --namespace ${NAMESPACE} \
                                 --timeout=120s
 
                             echo
                             echo "Web application rollout successful."
                         '''
 
+                        // ------------------------------------------------
+                        // Verify that the expected image was deployed
+                        // ------------------------------------------------
                         sh '''
                             set -e
 
@@ -177,11 +255,11 @@ pipeline {
                             echo "=========================================="
 
                             ACTUAL_IMAGE=$(kubectl get deployment ${APP_NAME} \
-                                -n ${NAMESPACE} \
-                                -o jsonpath='{.spec.template.spec.containers[0].image}')
+                                --namespace ${NAMESPACE} \
+                                --output jsonpath='{.spec.template.spec.containers[?(@.name=="'${CONTAINER_NAME}'")].image}')
 
-                            echo "Expected Image: ${IMAGE}"
-                            echo "Actual Image  : ${ACTUAL_IMAGE}"
+                            echo "Expected image: ${IMAGE}"
+                            echo "Actual image  : ${ACTUAL_IMAGE}"
 
                             if [ "${ACTUAL_IMAGE}" != "${IMAGE}" ]; then
                                 echo
@@ -195,70 +273,120 @@ pipeline {
                             echo "Image verification successful."
                         '''
 
-                    } catch (Exception e) {
+                    } catch (Exception deploymentError) {
 
                         echo "=========================================="
                         echo "DEPLOYMENT FAILED"
                         echo "=========================================="
 
+                        echo "Collecting Kubernetes diagnostics..."
+
+                        // ------------------------------------------------
+                        // Gather information before performing rollback
+                        // ------------------------------------------------
                         sh '''
-                            echo "=== Deployment Status ==="
+                            echo
+                            echo "=== Deployment ==="
 
                             kubectl get deployment ${APP_NAME} \
-                                -n ${NAMESPACE} \
-                                -o wide || true
+                                --namespace ${NAMESPACE} \
+                                --output wide || true
 
                             echo
                             echo "=== Pods ==="
 
                             kubectl get pods \
-                                -n ${NAMESPACE} \
-                                -o wide || true
+                                --namespace ${NAMESPACE} \
+                                --output wide || true
 
                             echo
                             echo "=== ReplicaSets ==="
 
-                            kubectl get rs \
-                                -n ${NAMESPACE} || true
+                            kubectl get replicasets \
+                                --namespace ${NAMESPACE} \
+                                --selector app=${APP_NAME} || true
 
                             echo
                             echo "=== Recent Events ==="
 
                             kubectl get events \
-                                -n ${NAMESPACE} \
-                                --sort-by=.lastTimestamp \
+                                --namespace ${NAMESPACE} \
+                                --sort-by=.metadata.creationTimestamp \
                                 | tail -30 || true
+
+                            echo
+                            echo "=== Pod Descriptions ==="
+
+                            kubectl describe pods \
+                                --namespace ${NAMESPACE} \
+                                --selector app=${APP_NAME} || true
                         '''
 
-                        echo "=========================================="
-                        echo "Rolling Back Web Application"
-                        echo "=========================================="
+                        /*
+                         * Roll back only when:
+                         *
+                         * 1. The image update was started.
+                         * 2. A previous image was found.
+                         */
+                        if (imageUpdateStarted && previousImage) {
 
-                        sh '''
-                            kubectl rollout undo \
-                                deployment/${APP_NAME} \
-                                -n ${NAMESPACE}
-                        '''
+                            echo "=========================================="
+                            echo "RESTORING PREVIOUS IMAGE"
+                            echo "=========================================="
 
-                        sh '''
-                            echo "=== Waiting for Rollback ==="
+                            echo "Failed image  : ${env.IMAGE}"
+                            echo "Restoring image: ${previousImage}"
 
-                            kubectl rollout status \
-                                deployment/${APP_NAME} \
-                                -n ${NAMESPACE} \
-                                --timeout=120s
-                        '''
+                            /*
+                             * Make the Groovy previousImage variable
+                             * available inside the shell block.
+                             */
+                            withEnv(["PREVIOUS_IMAGE=${previousImage}"]) {
 
-                        echo "Rollback completed successfully."
+                                sh '''
+                                    set -e
 
+                                    kubectl set image \
+                                        deployment/${APP_NAME} \
+                                        ${CONTAINER_NAME}=${PREVIOUS_IMAGE} \
+                                        --namespace ${NAMESPACE}
+
+                                    echo
+                                    echo "Waiting for rollback to complete..."
+
+                                    kubectl rollout status \
+                                        deployment/${APP_NAME} \
+                                        --namespace ${NAMESPACE} \
+                                        --timeout=120s
+                                '''
+                            }
+
+                            echo "Rollback completed successfully."
+
+                            error(
+                                "Deployment of ${env.IMAGE} failed. " +
+                                "Previous image ${previousImage} was restored."
+                            )
+                        }
+
+                        /*
+                         * This happens if manifest application failed
+                         * before the image update started, or if this
+                         * is the first deployment and no old image exists.
+                         */
                         error(
-                            "Deployment failed. Previous version has been restored."
+                            "Deployment failed, but no previous application " +
+                            "image was available for rollback. " +
+                            "Original error: ${deploymentError.getMessage()}"
                         )
                     }
                 }
             }
         }
 
+        // ============================================================
+        // Stage 7: Display final Kubernetes deployment information
+        // ============================================================
         stage('Verify Deployment') {
             steps {
                 sh '''
@@ -269,8 +397,8 @@ pipeline {
                     echo "=========================================="
 
                     kubectl get pods \
-                        -n ${NAMESPACE} \
-                        -o wide
+                        --namespace ${NAMESPACE} \
+                        --output wide
 
                     echo
                     echo "=========================================="
@@ -278,7 +406,7 @@ pipeline {
                     echo "=========================================="
 
                     kubectl get deployments \
-                        -n ${NAMESPACE}
+                        --namespace ${NAMESPACE}
 
                     echo
                     echo "=========================================="
@@ -286,7 +414,7 @@ pipeline {
                     echo "=========================================="
 
                     kubectl get services \
-                        -n ${NAMESPACE}
+                        --namespace ${NAMESPACE}
 
                     echo
                     echo "=========================================="
@@ -294,7 +422,16 @@ pipeline {
                     echo "=========================================="
 
                     kubectl get ingress \
-                        -n ${NAMESPACE}
+                        --namespace ${NAMESPACE}
+
+                    echo
+                    echo "=========================================="
+                    echo "ReplicaSets"
+                    echo "=========================================="
+
+                    kubectl get replicasets \
+                        --namespace ${NAMESPACE} \
+                        --selector app=${APP_NAME}
 
                     echo
                     echo "=========================================="
@@ -302,8 +439,8 @@ pipeline {
                     echo "=========================================="
 
                     kubectl get deployment ${APP_NAME} \
-                        -n ${NAMESPACE} \
-                        -o jsonpath='{.spec.template.spec.containers[0].image}'
+                        --namespace ${NAMESPACE} \
+                        --output jsonpath='{.spec.template.spec.containers[?(@.name=="'${CONTAINER_NAME}'")].image}'
 
                     echo
                 '''
@@ -311,23 +448,27 @@ pipeline {
         }
     }
 
+    // ================================================================
+    // Actions performed after the stages finish
+    // ================================================================
     post {
 
         success {
             echo "=========================================="
-            echo "Pipeline completed successfully."
+            echo "PIPELINE COMPLETED SUCCESSFULLY"
             echo "=========================================="
 
-            echo "Git SHA      : ${GIT_SHA}"
-            echo "Image deployed: ${IMAGE}"
+            echo "Git SHA       : ${env.GIT_SHA}"
+            echo "Image deployed: ${env.IMAGE}"
         }
 
         failure {
             echo "=========================================="
-            echo "Pipeline FAILED."
+            echo "PIPELINE FAILED"
             echo "=========================================="
 
-            echo "Check the logs above."
+            echo "Attempted image: ${env.IMAGE ?: 'Not created'}"
+            echo "Check the deployment and rollback logs above."
         }
 
         always {
