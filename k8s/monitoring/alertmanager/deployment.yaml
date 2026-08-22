@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: alertmanager
+  namespace: monitoring
+  labels:
+    app: alertmanager
+
+spec:
+  replicas: 1
+
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app: alertmanager
+
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+
+    spec:
+      nodeSelector:
+        kubernetes.io/os: linux
+
+      containers:
+        - name: alertmanager
+          image: quay.io/prometheus/alertmanager:v0.34.0
+          imagePullPolicy: IfNotPresent
+
+          args:
+            - --config.file=/etc/alertmanager/alertmanager.yml
+            - --storage.path=/alertmanager
+            - --cluster.listen-address=
+
+          ports:
+            - name: web
+              containerPort: 9093
+
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: web
+            initialDelaySeconds: 5
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /-/healthy
+              port: web
+            initialDelaySeconds: 15
+            periodSeconds: 20
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+          volumeMounts:
+            - name: alertmanager-config
+              mountPath: /etc/alertmanager
+              readOnly: true
+
+            - name: alertmanager-data
+              mountPath: /alertmanager
+
+      volumes:
+        - name: alertmanager-config
+          configMap:
+            name: alertmanager-config
+
+        - name: alertmanager-data
+          persistentVolumeClaim:
+            claimName: alertmanager-data
