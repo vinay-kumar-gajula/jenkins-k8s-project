@@ -1,0 +1,25 @@
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: mailhog
+  namespace: monitoring
+  labels:
+    app: mailhog
+
+spec:
+  type: ClusterIP
+
+  selector:
+    app: mailhog
+
+  ports:
+    - name: smtp
+      protocol: TCP
+      port: 1025
+      targetPort: smtp
+
+    - name: web
+      protocol: TCP
+      port: 8025
+      targetPort: web

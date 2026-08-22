@@ -12,8 +12,12 @@ data:
     global:
       resolve_timeout: 5m
 
+      smtp_smarthost: mailhog.monitoring.svc.cluster.local:1025
+      smtp_from: alertmanager@devops-lab.local
+      smtp_require_tls: false
+
     route:
-      receiver: local-receiver
+      receiver: mailhog-email
 
       group_by:
         - alertname
@@ -25,4 +29,8 @@ data:
       repeat_interval: 4h
 
     receivers:
-      - name: local-receiver
+      - name: mailhog-email
+
+        email_configs:
+          - to: devops-team@devops-lab.local
+            send_resolved: true
